@@ -1,0 +1,10 @@
+/to-do.md
+/.ufbt/
+/.vscode/
+/.clangd/
+/build/
+/dist/*.fap
+*.db
+*.sqlite
+*.wordlist
+*.txt.partial

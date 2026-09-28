@@ -1,0 +1,14 @@
+App(
+    appid="tv_remote_fz",
+    name="TV Remote FZ",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="tv_remote_fz_app",
+    sources=["tv_remote_fz.c", "tv_remote_core.c", "tv_remote_signal.c", "tv_remote_icons.c"],
+    requires=["gui", "storage", "dialogs", "notification"],
+    stack_size=4096,
+    fap_category="Infrared",
+    fap_description="Graphical remote for genuine saved Flipper IR signals",
+    fap_author="TV Remote FZ contributors",
+    fap_version="1.0.2",
+    fap_file_assets="assets",
+)

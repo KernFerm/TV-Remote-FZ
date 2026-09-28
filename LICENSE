@@ -1,0 +1,10 @@
+TV Remote FZ is licensed under the GNU General Public License, version 3 or
+(at your option) any later version.
+
+SPDX-License-Identifier: GPL-3.0-or-later
+
+The complete license text is available at:
+https://www.gnu.org/licenses/gpl-3.0.txt
+
+The infrared file-format compatibility code is based on behavior documented
+and implemented by the GPL-licensed Flipper Zero firmware project.
