@@ -11,6 +11,10 @@ int main(void) {
     assert(tvr_normalize("volume-down") == TvrActionVolumeDown);
     assert(tvr_normalize("CH+") == TvrActionChannelUp);
     assert(tvr_normalize("Input / Source") == TvrActionInput);
+    assert(tvr_normalize("HDMI 3") == TvrActionHdmi3);
+    assert(tvr_normalize("Input_av") == TvrActionAv);
+    assert(tvr_normalize("Component 2") == TvrActionComponent2);
+    assert(tvr_normalize("Enter") == TvrActionNumEnter);
     assert(tvr_normalize("RETURN") == TvrActionBack);
     assert(tvr_normalize("Fast Forward") == TvrActionFastForward);
     assert(tvr_normalize("digit_9") == TvrActionNum9);
@@ -21,6 +25,7 @@ int main(void) {
     assert(tvr_action_page(TvrActionLeft) == TvrPageNavigation);
     assert(tvr_action_page(TvrActionNum0) == TvrPageNumbers);
     assert(tvr_action_page(TvrActionRecord) == TvrPageMedia);
+    assert(tvr_action_page(TvrActionHdmi1) == TvrPageInputs);
     assert(tvr_action_page(TvrActionOther) == TvrPageExtra);
     assert(tvr_action_repeats(TvrActionVolumeUp));
     assert(tvr_action_repeats(TvrActionChannelDown));

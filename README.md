@@ -2,7 +2,7 @@
 
 TV Remote FZ is a graphical infrared remote for Flipper Zero. It ships with 3,051 genuine TV remotes organized by brand and model, imports other Flipper `.ir` files, remembers up to eight televisions, and presents only commands actually stored in the selected file. It does not generate, infer, or substitute IR codes.
 
-Version: **1.0.2**  
+Version: **1.0.4**  
 Firmware target: official Flipper firmware **1.4.3+**, target f7 / API 87.1  
 License: **GNU GPL v3 or later**
 
@@ -38,7 +38,7 @@ The app remembers the file path; it does not duplicate or alter the source remot
 - **Short Left/Right/Up/Down**: move between graphical buttons.
 - **OK**: send the selected command.
 - **Hold OK on Volume/Channel buttons**: controlled repeat; release stops immediately.
-- **Hold Left/Right**: move between Quick, Channel, Navigation, Numbers, Media, and Extra pages that contain real commands.
+- **Hold Left/Right**: move between Quick, Channel, Navigation, Numbers, Media, Inputs, and Extra pages that contain real commands.
 - **Navigation page**: the physical directional pad and OK directly send the matching TV navigation commands. Hold **OK** to switch to a focused Home/Menu/Back/Exit panel; hold **OK** again to return to direct control.
 - **Hold OK on any non-Navigation remote page**: open Remote Information, Rename, Favorite, All Commands, or Remove.
 - **Back**: return without transmitting.
@@ -53,6 +53,9 @@ The app remembers the file path; it does not duplicate or alter the source remot
 - Unknown and manufacturer-specific commands remain available under **Extra** and **All Commands**.
 - The number page is always arranged 1–9, then 0 and dash, independent of source-file order.
 - Missing actions create no dead or guessed buttons.
+- Real discrete HDMI, AV, Component, and TV input commands appear on the Inputs page when present.
+- Enter and Previous/Last appear with the numeric keypad when present; they remain backed by the original stored signals.
+- Remote Information preserves the bundled manufacturer, remote family, and database source. It explicitly reports when an upstream TV model was not provided.
 
 ## Build
 

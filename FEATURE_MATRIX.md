@@ -8,14 +8,15 @@
 | Direct navigation pad | Implemented | Physical D-pad/OK map to present TV navigation signals; held OK toggles a focused Home/Menu/Back/Exit panel |
 | Number page | Implemented | Actual 1–9, 0, and dash signals in deterministic keypad order |
 | Media page | Implemented | Actual play/pause/stop/rewind/forward/previous/next/record signals |
+| Discrete inputs page | Implemented | Actual generic Input, HDMI/HDMI 1-4, AV, Component 1-3, and TV signals where present |
 | Smart/Extra | Implemented | Unclassified/manufacturer-specific commands, paged in bounded groups |
-| All Commands | Implemented | Complete original-name browser and sender |
+| All Commands | Implemented | Complete original-name browser and sender, grouped by Quick/TV/Navigation/Numbers/Media/Inputs/Extra |
 | Alias normalization | Implemented | Classification only; signal data is untouched |
 | Held volume/channel | Implemented | Official `InfraredWorker` steady callback; release/back/page change/exit stop it |
 | Saved/favorite TVs | Implemented | Up to 8 file references; transactional settings file |
 | Included TV codes | Implemented | 3,051 real remotes from official Flipper Devices IRDB revision `f7b1536`, packed into one bounded indexed database |
 | Friendly names | Implemented | Rename without changing source filename or signal names |
-| Remote information | Implemented | Friendly name, path/source, total, parsed, and RAW counts |
+| Remote information | Implemented | Friendly name, brand, TV model availability, remote family, database source, file path, total, parsed, and RAW counts |
 | TX feedback | Implemented | Brief `TX Sent`, blue LED flash, optional haptic |
 | Monochrome visual assets | Implemented | Application-owned vector icons in `tv_remote_icons.c` for power, mute, volume, channel, input, home, menu, back, guide, info, and media |
 | Missing commands | Implemented | Never displayed or guessed |

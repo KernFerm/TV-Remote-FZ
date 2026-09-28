@@ -16,8 +16,25 @@ static const TvrAlias aliases[] = {
     {"mute", TvrActionMute},
     {"volumemute", TvrActionMute},
     {"input", TvrActionInput},
+    {"inputs", TvrActionInput},
+    {"inputnext", TvrActionInput},
     {"source", TvrActionInput},
     {"inputsource", TvrActionInput},
+    {"hdmi", TvrActionHdmi},
+    {"hdmihot", TvrActionHdmi},
+    {"hdmi1", TvrActionHdmi1},
+    {"hdmi2", TvrActionHdmi2},
+    {"hdmi3", TvrActionHdmi3},
+    {"hdmi4", TvrActionHdmi4},
+    {"av", TvrActionAv},
+    {"inputav", TvrActionAv},
+    {"aux", TvrActionAv},
+    {"inputaux", TvrActionAv},
+    {"inputtv", TvrActionTv},
+    {"component", TvrActionComponent},
+    {"component1", TvrActionComponent1},
+    {"component2", TvrActionComponent2},
+    {"component3", TvrActionComponent3},
     {"volup", TvrActionVolumeUp},
     {"volumeup", TvrActionVolumeUp},
     {"volumeplus", TvrActionVolumeUp},
@@ -63,7 +80,7 @@ static const TvrAlias aliases[] = {
     {"navright", TvrActionRight},
     {"cursorright", TvrActionRight},
     {"ok", TvrActionOk},
-    {"enter", TvrActionOk},
+    {"enter", TvrActionNumEnter},
     {"select", TvrActionOk},
     {"confirm", TvrActionOk},
     {"home", TvrActionHome},
@@ -114,6 +131,7 @@ static const TvrAlias aliases[] = {
     {"digit9", TvrActionNum9},
     {"dash", TvrActionDash},
     {"hyphen", TvrActionDash},
+    {"numenter", TvrActionNumEnter},
     {"play", TvrActionPlay},
     {"pause", TvrActionPause},
     {"stop", TvrActionStop},
@@ -163,21 +181,26 @@ TvrAction tvr_normalize(const char* name) {
 }
 
 TvrPage tvr_action_page(TvrAction action) {
-    if(action >= TvrActionNum0 && action <= TvrActionDash) return TvrPageNumbers;
+    if(action >= TvrActionHdmi && action <= TvrActionComponent3) return TvrPageInputs;
+    if(action >= TvrActionNum0 && action <= TvrActionNumEnter) return TvrPageNumbers;
     if(action >= TvrActionPlay && action <= TvrActionRecord) return TvrPageMedia;
     if(action >= TvrActionUp && action <= TvrActionExit) return TvrPageNavigation;
     if(action >= TvrActionPreviousChannel && action <= TvrActionAudio) return TvrPageChannel;
-    if(action >= TvrActionPower && action <= TvrActionChannelDown) return TvrPageQuick;
+    if(action == TvrActionPower || action == TvrActionMute || action == TvrActionInput ||
+       action == TvrActionVolumeUp || action == TvrActionVolumeDown ||
+       action == TvrActionChannelUp || action == TvrActionChannelDown)
+        return TvrPageQuick;
     return TvrPageExtra;
 }
 
 const char* tvr_action_label(TvrAction a) {
     static const char* const labels[] = {
-        "EXTRA", "PWR",   "MUTE", "INPUT", "VOL+", "VOL-", "CH+",   "CH-", "LAST",
-        "GUIDE", "INFO",  "FAV",  "TV",    "CC",   "SUB",  "AUDIO", "UP",  "DOWN",
-        "LEFT",  "RIGHT", "OK",   "HOME",  "MENU", "BACK", "EXIT",  "0",   "1",
-        "2",     "3",     "4",    "5",     "6",    "7",    "8",     "9",   "-",
-        "PLAY",  "PAUSE", "STOP", "REW",   "FF",   "PREV", "NEXT",  "REC", "SET"};
+        "EXTRA", "PWR",   "MUTE",  "INPUT", "HDMI", "HDMI1", "HDMI2", "HDMI3", "HDMI4", "AV",
+        "COMP",  "COMP1", "COMP2", "COMP3", "VOL+", "VOL-",  "CH+",   "CH-",   "LAST",  "GUIDE",
+        "INFO",  "FAV",   "TV",    "CC",    "SUB",  "AUDIO", "UP",    "DOWN",  "LEFT",  "RIGHT",
+        "OK",    "HOME",  "MENU",  "BACK",  "EXIT", "0",     "1",     "2",     "3",     "4",
+        "5",     "6",     "7",     "8",     "9",    "-",     "ENTER", "PLAY",  "PAUSE", "STOP",
+        "REW",   "FF",    "PREV",  "NEXT",  "REC",  "SET"};
     return a < TvrActionCount ? labels[a] : "?";
 }
 

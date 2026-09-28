@@ -2,7 +2,8 @@
 #include "tv_remote_icons.h"
 
 bool tvr_icon_available(TvrAction action) {
-    return action == TvrActionPower || action == TvrActionMute || action == TvrActionInput ||
+    return action == TvrActionPower || action == TvrActionMute ||
+           (action >= TvrActionInput && action <= TvrActionComponent3) ||
            action == TvrActionVolumeUp || action == TvrActionVolumeDown ||
            action == TvrActionChannelUp || action == TvrActionChannelDown ||
            action == TvrActionGuide || action == TvrActionInfo || action == TvrActionHome ||
@@ -29,7 +30,7 @@ void tvr_icon_draw(Canvas* canvas, TvrAction action, int x, int y) {
         canvas_draw_line(canvas, x - 2, y + 2, x + 1, y + 4);
         canvas_draw_line(canvas, x + 3, y - 3, x + 6, y + 3);
         canvas_draw_line(canvas, x + 6, y - 3, x + 3, y + 3);
-    } else if(action == TvrActionInput) {
+    } else if(action >= TvrActionInput && action <= TvrActionComponent3) {
         canvas_draw_frame(canvas, x - 5, y - 4, 8, 8);
         canvas_draw_line(canvas, x, y, x + 6, y);
         canvas_draw_line(canvas, x + 4, y - 2, x + 6, y);

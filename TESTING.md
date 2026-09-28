@@ -13,7 +13,7 @@
 - Mixed parsed/RAW file.
 - Wrong header/version, empty file, malformed protocol, invalid address/command width.
 - RAW count 0, count 1, count 1,024, count 1,025, invalid frequency/duty, allocation failure.
-- More than 160 commands is rejected as an unsupported oversized remote rather than silently called complete.
+- More than 224 commands is rejected as an unsupported oversized remote rather than silently called complete.
 - SD removal during import and immediately before transmission.
 
 ## Physical Flipper checklist (required before UI completion)
@@ -28,5 +28,9 @@
 8. Confirm missing actions do not appear and page switching never transmits.
 9. Rapidly press controls, switch pages, reopen, rename, and alternate between saved TVs.
 10. Remove the SD card during a safe non-write test and confirm an error is shown instead of a false send result.
+11. On a remote containing discrete inputs, confirm the Inputs page contains only its real HDMI/AV/Component/TV commands.
+12. On a remote containing Enter and Last, confirm both are reachable from the numeric page.
+13. Confirm Remote Information shows the saved brand, remote family, and Flipper Devices IRDB source for a bundled remote.
+14. Confirm All Commands is grouped by category and still contains every original command name.
 
 Record the tested firmware, remote file, screen observations, and results. Source inspection or emulator-only testing does not satisfy the physical UI requirement.

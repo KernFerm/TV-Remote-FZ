@@ -25,7 +25,7 @@
 /* Exported in target-f7 API 87.1; omitted by the public umbrella header. */
 Stream* flipper_format_get_raw_stream(FlipperFormat* flipper_format);
 
-#define TVR_VERSION        "1.0.2"
+#define TVR_VERSION        "1.0.4"
 #define TVR_MAX_TVS        8U
 #define TVR_PATH_MAX       384U
 #define TVR_CONFIG         APP_DATA_PATH("tvs.cfg")
@@ -75,6 +75,10 @@ typedef enum {
 typedef struct {
     char friendly[TVR_NAME_MAX];
     char path[TVR_PATH_MAX];
+    char brand[52];
+    char tv_model[64];
+    char remote_family[64];
+    char source[48];
 } TvrSavedTv;
 
 typedef struct TvrApp TvrApp;
@@ -229,25 +233,67 @@ static bool tvr_db_read_model(TvrApp* app, File* file, uint32_t index, TvrDbMode
            end <= storage_file_size(file);
 }
 
+static bool tvr_db_restore_metadata(TvrApp* app, TvrSavedTv* tv) {
+    const char* filename = strrchr(tv->path, '/');
+    filename = filename ? filename + 1U : tv->path;
+    unsigned long id = 0U;
+    char trailing = '\0';
+    if(sscanf(filename, "db_%lu.ir%c", &id, &trailing) != 1 || id > UINT32_MAX) return false;
+    File* file = storage_file_alloc(app->storage);
+    TvrDbModel model;
+    TvrDbBrand brand;
+    bool ok = file && tvr_db_open(app, file) &&
+              tvr_db_read_model(app, file, (uint32_t)id, &model) && model.id == (uint32_t)id;
+    bool found_brand = false;
+    for(uint32_t i = 0U; ok && i < app->db_header.brand_count; ++i) {
+        if(!tvr_db_read_brand(app, file, i, &brand)) {
+            ok = false;
+            break;
+        }
+        if(id >= brand.first_model && id < brand.first_model + brand.model_count) {
+            found_brand = true;
+            break;
+        }
+    }
+    if(file) {
+        if(storage_file_is_open(file)) storage_file_close(file);
+        storage_file_free(file);
+    }
+    if(!ok || !found_brand) return false;
+    tvr_safe_label(brand.name, tv->brand, sizeof(tv->brand));
+    strlcpy(tv->tv_model, "Not specified by IRDB", sizeof(tv->tv_model));
+    tvr_safe_label(model.name, tv->remote_family, sizeof(tv->remote_family));
+    strlcpy(tv->source, "Flipper Devices IRDB", sizeof(tv->source));
+    return true;
+}
+
 static bool tvr_save_config(TvrApp* app) {
     if(!storage_simply_mkdir(app->storage, APP_DATA_PATH(""))) return false;
     File* file = storage_file_alloc(app->storage);
     if(!file) return false;
     bool ok = storage_file_open(file, TVR_CONFIG_TMP, FSAM_WRITE, FSOM_CREATE_ALWAYS);
-    char line[TVR_PATH_MAX + TVR_NAME_MAX + 32U];
+    char line[TVR_PATH_MAX + TVR_NAME_MAX + 260U];
     if(ok) {
         int n = snprintf(
             line,
             sizeof(line),
-            "TVRFZ1\nD\t%u\nH\t%u\nF\t%d\n",
+            "TVRFZ2\nD\t%u\nH\t%u\nF\t%d\n",
             app->direct_launch ? 1U : 0U,
             app->haptic ? 1U : 0U,
             (int)app->favorite);
         ok = n > 0 && (size_t)n < sizeof(line) && tvr_write_all(file, line, (size_t)n);
     }
     for(uint8_t i = 0; ok && i < app->tv_count; ++i) {
-        int n =
-            snprintf(line, sizeof(line), "T\t%s\t%s\n", app->tvs[i].friendly, app->tvs[i].path);
+        int n = snprintf(
+            line,
+            sizeof(line),
+            "T\t%s\t%s\t%s\t%s\t%s\t%s\n",
+            app->tvs[i].friendly,
+            app->tvs[i].path,
+            app->tvs[i].brand,
+            app->tvs[i].tv_model,
+            app->tvs[i].remote_family,
+            app->tvs[i].source);
         ok = n > 0 && (size_t)n < sizeof(line) && tvr_write_all(file, line, (size_t)n);
     }
     if(ok) ok = storage_file_sync(file);
@@ -287,7 +333,7 @@ static void tvr_load_config(TvrApp* app) {
         return;
     }
     uint64_t size64 = storage_file_size(file);
-    if(size64 == 0U || size64 > 4095U) {
+    if(size64 == 0U || size64 > 8191U) {
         storage_file_close(file);
         storage_file_free(file);
         return;
@@ -316,10 +362,12 @@ static void tvr_load_config(TvrApp* app) {
         cursor = newline + 1U;
     } else
         cursor = NULL;
-    if(!line || strcmp(line, "TVRFZ1") != 0) {
+    bool config_v2 = line && strcmp(line, "TVRFZ2") == 0;
+    if(!line || (!config_v2 && strcmp(line, "TVRFZ1") != 0)) {
         free(data);
         return;
     }
+    bool migrated = false;
     while(cursor && *cursor) {
         line = cursor;
         newline = strchr(cursor, '\n');
@@ -335,17 +383,36 @@ static void tvr_load_config(TvrApp* app) {
         else if(!strncmp(line, "F\t", 2U))
             app->favorite = (int8_t)strtol(line + 2U, NULL, 10);
         else if(!strncmp(line, "T\t", 2U) && app->tv_count < TVR_MAX_TVS) {
-            char* separator = strchr(line + 2U, '\t');
-            if(!separator) continue;
-            *separator = '\0';
-            strlcpy(app->tvs[app->tv_count].friendly, line + 2U, TVR_NAME_MAX);
-            strlcpy(app->tvs[app->tv_count].path, separator + 1U, TVR_PATH_MAX);
-            if(app->tvs[app->tv_count].friendly[0] && app->tvs[app->tv_count].path[0])
-                app->tv_count++;
+            char* fields[6] = {line + 2U, NULL, NULL, NULL, NULL, NULL};
+            size_t field_count = 1U;
+            for(char* p = fields[0]; *p && field_count < COUNT_OF(fields); ++p) {
+                if(*p == '\t') {
+                    *p = '\0';
+                    fields[field_count++] = p + 1U;
+                }
+            }
+            if(field_count < 2U) continue;
+            TvrSavedTv* tv = &app->tvs[app->tv_count];
+            strlcpy(tv->friendly, fields[0], sizeof(tv->friendly));
+            strlcpy(tv->path, fields[1], sizeof(tv->path));
+            if(config_v2 && field_count == COUNT_OF(fields)) {
+                strlcpy(tv->brand, fields[2], sizeof(tv->brand));
+                strlcpy(tv->tv_model, fields[3], sizeof(tv->tv_model));
+                strlcpy(tv->remote_family, fields[4], sizeof(tv->remote_family));
+                strlcpy(tv->source, fields[5], sizeof(tv->source));
+            } else {
+                strlcpy(tv->brand, "Not specified", sizeof(tv->brand));
+                strlcpy(tv->tv_model, "Not specified", sizeof(tv->tv_model));
+                strlcpy(tv->remote_family, tv->friendly, sizeof(tv->remote_family));
+                strlcpy(tv->source, "Saved .ir file", sizeof(tv->source));
+                migrated = tvr_db_restore_metadata(app, tv) || migrated;
+            }
+            if(tv->friendly[0] && tv->path[0]) app->tv_count++;
         }
     }
     if(app->favorite < 0 || app->favorite >= (int8_t)app->tv_count) app->favorite = -1;
     free(data);
+    if(migrated) tvr_save_config(app);
 }
 
 static void tvr_rebuild_main(TvrApp* app) {
@@ -412,16 +479,22 @@ static uint16_t tvr_find_action(const TvrApp* app, TvrAction action) {
     return UINT16_MAX;
 }
 
+static bool tvr_action_on_page(TvrAction action, TvrPage page) {
+    if(page == TvrPageNumbers && action == TvrActionPreviousChannel) return true;
+    if(page == TvrPageInputs && (action == TvrActionInput || action == TvrActionTv)) return true;
+    return tvr_action_page(action) == page;
+}
+
 static bool tvr_page_has_commands(const TvrApp* app, TvrPage page) {
     for(uint16_t i = 0; i < app->command_count; ++i)
-        if(tvr_action_page(app->commands[i].action) == page) return true;
+        if(tvr_action_on_page(app->commands[i].action, page)) return true;
     return false;
 }
 
 static void tvr_build_visible(TvrApp* app) {
     app->visible_count = 0U;
     if(app->page == TvrPageQuick || app->page == TvrPageNumbers || app->page == TvrPageMedia ||
-       (app->page == TvrPageNavigation && app->nav_extras)) {
+       app->page == TvrPageInputs || (app->page == TvrPageNavigation && app->nav_extras)) {
         static const TvrAction quick_order[] = {
             TvrActionPower,
             TvrActionMute,
@@ -443,6 +516,8 @@ static void tvr_build_visible(TvrApp* app) {
             TvrActionNum9,
             TvrActionNum0,
             TvrActionDash,
+            TvrActionNumEnter,
+            TvrActionPreviousChannel,
         };
         static const TvrAction media_order[] = {
             TvrActionPlay,
@@ -460,6 +535,20 @@ static void tvr_build_visible(TvrApp* app) {
             TvrActionBack,
             TvrActionExit,
         };
+        static const TvrAction input_order[] = {
+            TvrActionInput,
+            TvrActionHdmi,
+            TvrActionHdmi1,
+            TvrActionHdmi2,
+            TvrActionHdmi3,
+            TvrActionHdmi4,
+            TvrActionAv,
+            TvrActionComponent,
+            TvrActionComponent1,
+            TvrActionComponent2,
+            TvrActionComponent3,
+            TvrActionTv,
+        };
         const TvrAction* order = quick_order;
         size_t order_count = COUNT_OF(quick_order);
         if(app->page == TvrPageNumbers) {
@@ -471,6 +560,9 @@ static void tvr_build_visible(TvrApp* app) {
         } else if(app->page == TvrPageNavigation) {
             order = navigation_extra_order;
             order_count = COUNT_OF(navigation_extra_order);
+        } else if(app->page == TvrPageInputs) {
+            order = input_order;
+            order_count = COUNT_OF(input_order);
         }
         for(size_t n = 0; n < order_count; ++n) {
             uint16_t found = tvr_find_action(app, order[n]);
@@ -478,7 +570,7 @@ static void tvr_build_visible(TvrApp* app) {
         }
     } else {
         for(uint16_t i = 0; i < app->command_count; ++i)
-            if(tvr_action_page(app->commands[i].action) == app->page)
+            if(tvr_action_on_page(app->commands[i].action, app->page))
                 app->visible[app->visible_count++] = i;
     }
     if(app->selected >= app->visible_count)
@@ -583,9 +675,10 @@ static void tvr_draw_header(Canvas* canvas, TvrApp* app) {
     snprintf(
         page,
         sizeof(page),
-        "%s%u/6",
+        "%s%u/%u",
         app->active_tv == app->favorite ? "*" : "",
-        (unsigned)app->page + 1U);
+        (unsigned)app->page + 1U,
+        (unsigned)TvrPageCount);
     canvas_set_font(canvas, FontSecondary);
     canvas_draw_str(canvas, 1, 8, title);
     canvas_draw_str_aligned(canvas, 127, 8, AlignRight, AlignBottom, page);
@@ -765,11 +858,43 @@ static void tvr_command_selected(void* context, uint32_t index) {
     }
 }
 
+static const char* tvr_command_category(TvrAction action) {
+    if(action == TvrActionInput || action == TvrActionTv ||
+       tvr_action_page(action) == TvrPageInputs)
+        return "IN";
+    switch(tvr_action_page(action)) {
+    case TvrPageQuick:
+        return "Q";
+    case TvrPageChannel:
+        return "TV";
+    case TvrPageNavigation:
+        return "NAV";
+    case TvrPageNumbers:
+        return "NUM";
+    case TvrPageMedia:
+        return "MED";
+    case TvrPageInputs:
+        return "IN";
+    case TvrPageExtra:
+    case TvrPageCount:
+    default:
+        return "EXT";
+    }
+}
+
 static void tvr_rebuild_commands(TvrApp* app) {
     submenu_reset(app->command_menu);
-    submenu_set_header(app->command_menu, "All original commands");
-    for(uint16_t i = 0; i < app->command_count; ++i)
-        submenu_add_item(app->command_menu, app->commands[i].name, i, tvr_command_selected, app);
+    submenu_set_header(app->command_menu, "All commands by category");
+    static const char* const categories[] = {"Q", "TV", "NAV", "NUM", "MED", "IN", "EXT"};
+    for(size_t category = 0U; category < COUNT_OF(categories); ++category) {
+        for(uint16_t i = 0; i < app->command_count; ++i) {
+            const char* command_category = tvr_command_category(app->commands[i].action);
+            if(strcmp(command_category, categories[category]) != 0) continue;
+            char label[TVR_NAME_MAX + 8U];
+            snprintf(label, sizeof(label), "%s: %s", command_category, app->commands[i].name);
+            submenu_add_item(app->command_menu, label, i, tvr_command_selected, app);
+        }
+    }
 }
 
 static void tvr_rebuild_manage(TvrApp* app);
@@ -812,12 +937,16 @@ static void tvr_manage_selected(void* context, uint32_t index) {
     TvrApp* app = context;
     if(app->active_tv < 0) return;
     if(index == ManageInfo) {
-        char info[620];
+        char info[900];
         snprintf(
             info,
             sizeof(info),
-            "Friendly: %s\nBrand/model: Not stored in .ir format\nSource: %s\nCommands: %u\nParsed: %u\nRAW: %u\n\nSignals are loaded unchanged from this file.",
+            "Friendly: %s\nBrand: %s\nTV model: %s\nRemote family: %s\nDatabase: %s\nFile: %s\nCommands: %u\nParsed: %u\nRAW: %u\n\nSignals are loaded unchanged.",
             app->tvs[app->active_tv].friendly,
+            app->tvs[app->active_tv].brand,
+            app->tvs[app->active_tv].tv_model,
+            app->tvs[app->active_tv].remote_family,
+            app->tvs[app->active_tv].source,
             app->tvs[app->active_tv].path,
             (unsigned)app->command_count,
             (unsigned)app->parsed_count,
@@ -876,8 +1005,15 @@ static void tvr_rebuild_tvs(TvrApp* app) {
         submenu_add_item(app->tv_menu, app->tvs[i].friendly, i, tvr_tv_selected, app);
 }
 
-static bool
-    tvr_accept_remote(TvrApp* app, const char* path, const char* friendly, TvrViewId back) {
+static bool tvr_accept_remote(
+    TvrApp* app,
+    const char* path,
+    const char* friendly,
+    const char* brand,
+    const char* tv_model,
+    const char* remote_family,
+    const char* source,
+    TvrViewId back) {
     if(app->tv_count >= TVR_MAX_TVS) {
         tvr_show(
             app,
@@ -888,6 +1024,14 @@ static bool
     }
     strlcpy(app->tvs[app->tv_count].path, path, TVR_PATH_MAX);
     tvr_safe_label(friendly, app->tvs[app->tv_count].friendly, TVR_NAME_MAX);
+    tvr_safe_label(brand, app->tvs[app->tv_count].brand, sizeof(app->tvs[app->tv_count].brand));
+    tvr_safe_label(
+        tv_model, app->tvs[app->tv_count].tv_model, sizeof(app->tvs[app->tv_count].tv_model));
+    tvr_safe_label(
+        remote_family,
+        app->tvs[app->tv_count].remote_family,
+        sizeof(app->tvs[app->tv_count].remote_family));
+    tvr_safe_label(source, app->tvs[app->tv_count].source, sizeof(app->tvs[app->tv_count].source));
     if(!app->tvs[app->tv_count].friendly[0])
         strlcpy(app->tvs[app->tv_count].friendly, "Television", TVR_NAME_MAX);
     uint8_t added = app->tv_count++;
@@ -933,7 +1077,14 @@ static void tvr_add_remote(TvrApp* app, const char* start_path, const char* base
     FuriString* filename = furi_string_alloc_set(furi_string_get_cstr(app->browser_path));
     path_extract_filename(filename, filename, true);
     tvr_accept_remote(
-        app, furi_string_get_cstr(app->browser_path), furi_string_get_cstr(filename), TvrViewMain);
+        app,
+        furi_string_get_cstr(app->browser_path),
+        furi_string_get_cstr(filename),
+        "Not specified",
+        "Not specified",
+        furi_string_get_cstr(filename),
+        "Imported .ir file",
+        TvrViewMain);
     furi_string_free(filename);
 }
 
@@ -1015,7 +1166,15 @@ static void tvr_model_selected(void* context, uint32_t index) {
     }
     char friendly[TVR_NAME_MAX];
     snprintf(friendly, sizeof(friendly), "%.22s %.23s", app->db_brand.name, model.name);
-    tvr_accept_remote(app, path, friendly, TvrViewModels);
+    tvr_accept_remote(
+        app,
+        path,
+        friendly,
+        app->db_brand.name,
+        "Not specified by IRDB",
+        model.name,
+        "Flipper Devices IRDB",
+        TvrViewModels);
 }
 
 static void tvr_brand_selected(void* context, uint32_t index) {
