@@ -122,4 +122,4 @@ Attach that file to the matching GitHub release; do not attach the debug ELF as 
 - A remote can contain up to 224 commands in this bounded port; a larger file is rejected rather than partially presented as complete.
 - TV control is limited to the Flipper's infrared hardware and the signals in the chosen file.
 
-See [TESTING.md](TESTING.md), [SECURITY.md](SECURITY.md), and [FEATURE_MATRIX.md](FEATURE_MATRIX.md).
+See [RELEASE_NOTES.md](RELEASE_NOTES.md), [CHANGELOG.md](CHANGELOG.md), [TESTING.md](TESTING.md), [SECURITY.md](SECURITY.md), and [FEATURE_MATRIX.md](FEATURE_MATRIX.md).

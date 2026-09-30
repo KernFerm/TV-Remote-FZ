@@ -6,17 +6,18 @@
 - The same generic `Enter` signal fills the NUM keypad's Enter position when the profile has no separate numeric-enter command.
 - Explicit `Num_enter`, `Channel_enter`, and `Digit_enter` names remain classified as numeric Enter.
 
-## Included from 1.1.0
+## Interface improvements
 
-- Purpose-built Quick, 3x4 Numbers, Media, and Extra layouts.
+- Purpose-built Quick, conventional 3x4 Numbers, Media, and Extra layouts.
 - Direct physical D-pad control on the Navigation page.
 - Geometry-aware focus movement, safe long-label truncation, and corrected page-indicator spacing.
+- Signal-driven pages: profiles without digit commands do not display a nonfunctional Numbers page.
 
-Pages remain signal-driven: profiles without digit commands do not display a nonfunctional Numbers page.
+For the complete version history, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Install from PowerShell or Command Prompt
 
-Connect the Flipper Zero by USB and close qFlipper before running either command.
+Connect the Flipper Zero by USB and close qFlipper before running either command. These commands require uFBT.
 
 PowerShell, assuming the release file is in Downloads:
 
