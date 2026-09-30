@@ -25,12 +25,15 @@
 /* Exported in target-f7 API 87.1; omitted by the public umbrella header. */
 Stream* flipper_format_get_raw_stream(FlipperFormat* flipper_format);
 
-#define TVR_VERSION        "1.0.4"
+#define TVR_VERSION        "1.1.1"
 #define TVR_MAX_TVS        8U
 #define TVR_PATH_MAX       384U
-#define TVR_CONFIG         APP_DATA_PATH("tvs.cfg")
-#define TVR_CONFIG_TMP     APP_DATA_PATH("tvs.cfg.partial")
-#define TVR_CONFIG_BAK     APP_DATA_PATH("tvs.cfg.backup")
+#define TVR_DATA_ROOT      EXT_PATH("apps_data")
+#define TVR_DATA_DIR       EXT_PATH("apps_data/tv_remote_fz")
+#define TVR_CONFIG         EXT_PATH("apps_data/tv_remote_fz/tvs.cfg")
+#define TVR_CONFIG_TMP     EXT_PATH("apps_data/tv_remote_fz/tvs.cfg.partial")
+#define TVR_CONFIG_BAK     EXT_PATH("apps_data/tv_remote_fz/tvs.cfg.backup")
+#define TVR_REMOTE_DIR     EXT_PATH("infrared/TV_Remote_FZ")
 #define TVR_DB_PATH        APP_ASSETS_PATH("tv_catalog.bin")
 #define TVR_DB_MAGIC       "TVRDB1\0\0"
 #define TVR_DB_HEADER_SIZE 32U
@@ -56,7 +59,13 @@ typedef struct {
     uint32_t payload_offset;
     uint32_t payload_size;
     uint32_t id;
+    uint32_t source_id;
 } TvrDbModel;
+
+enum {
+    TvrDbSourceOfficial = 0U,
+    TvrDbSourceCommunity = 1U,
+};
 
 typedef enum {
     TvrViewMain,
@@ -86,6 +95,13 @@ typedef struct {
     TvrApp* app;
     uint32_t revision;
 } TvrRemoteModel;
+
+typedef struct {
+    int16_t x;
+    int16_t y;
+    int16_t width;
+    int16_t height;
+} TvrButtonLayout;
 
 struct TvrApp {
     Gui* gui;
@@ -128,6 +144,7 @@ struct TvrApp {
     uint32_t sent_tick;
     TvrViewId current;
     TvrViewId text_back;
+    TvrViewId remote_back;
     char edit_name[TVR_NAME_MAX];
     TvrDbHeader db_header;
     TvrDbBrand db_brand;
@@ -156,6 +173,12 @@ static void tvr_main_selected(void* context, uint32_t index);
 static void tvr_switch(TvrApp* app, TvrViewId view) {
     app->current = view;
     view_dispatcher_switch_to_view(app->dispatcher, view);
+}
+
+static void tvr_redraw_remote(TvrApp* app) {
+    TvrRemoteModel* model = view_get_model(app->remote_view);
+    model->revision++;
+    view_commit_model(app->remote_view, true);
 }
 
 static void tvr_show(TvrApp* app, const char* title, const char* body, TvrViewId back) {
@@ -227,10 +250,32 @@ static bool tvr_db_read_model(TvrApp* app, File* file, uint32_t index, TvrDbMode
     model->payload_offset = tvr_u32le(data + 64U);
     model->payload_size = tvr_u32le(data + 68U);
     model->id = tvr_u32le(data + 72U);
+    model->source_id = tvr_u32le(data + 76U);
     uint64_t end = (uint64_t)model->payload_offset + model->payload_size;
     return model->name[0] && model->payload_size > 0U &&
+           model->source_id <= TvrDbSourceCommunity &&
            model->payload_offset >= app->db_header.payload_offset &&
            end <= storage_file_size(file);
+}
+
+static const char* tvr_db_source_name(uint32_t source_id) {
+    return source_id == TvrDbSourceCommunity ? "Flipper-IRDB community" : "Flipper Devices IRDB";
+}
+
+static uint32_t tvr_profile_hash(const char* brand, const char* profile, uint32_t source_id) {
+    uint32_t hash = 2166136261UL;
+    const char* fields[] = {brand, profile};
+    for(size_t field = 0U; field < COUNT_OF(fields); ++field) {
+        for(const uint8_t* p = (const uint8_t*)fields[field]; p && *p; ++p) {
+            hash ^= *p;
+            hash *= 16777619UL;
+        }
+        hash ^= 0xFFU;
+        hash *= 16777619UL;
+    }
+    hash ^= source_id;
+    hash *= 16777619UL;
+    return hash;
 }
 
 static bool tvr_db_restore_metadata(TvrApp* app, TvrSavedTv* tv) {
@@ -263,12 +308,14 @@ static bool tvr_db_restore_metadata(TvrApp* app, TvrSavedTv* tv) {
     tvr_safe_label(brand.name, tv->brand, sizeof(tv->brand));
     strlcpy(tv->tv_model, "Not specified by IRDB", sizeof(tv->tv_model));
     tvr_safe_label(model.name, tv->remote_family, sizeof(tv->remote_family));
-    strlcpy(tv->source, "Flipper Devices IRDB", sizeof(tv->source));
+    strlcpy(tv->source, tvr_db_source_name(model.source_id), sizeof(tv->source));
     return true;
 }
 
 static bool tvr_save_config(TvrApp* app) {
-    if(!storage_simply_mkdir(app->storage, APP_DATA_PATH(""))) return false;
+    if(!storage_simply_mkdir(app->storage, TVR_DATA_ROOT) ||
+       !storage_simply_mkdir(app->storage, TVR_DATA_DIR))
+        return false;
     File* file = storage_file_alloc(app->storage);
     if(!file) return false;
     bool ok = storage_file_open(file, TVR_CONFIG_TMP, FSAM_WRITE, FSOM_CREATE_ALWAYS);
@@ -322,6 +369,34 @@ static bool tvr_save_config(TvrApp* app) {
 static void tvr_sanitize_field(char* text) {
     for(; text && *text; ++text)
         if(*text == '\t' || *text == '\r' || *text == '\n') *text = ' ';
+}
+
+static bool tvr_dedupe_saved_tvs(TvrApp* app) {
+    if(!app->tv_count) return false;
+    int8_t old_favorite = app->favorite;
+    int8_t new_favorite = -1;
+    uint8_t unique_count = 0U;
+    bool changed = false;
+    for(uint8_t i = 0U; i < app->tv_count; ++i) {
+        int8_t existing = -1;
+        for(uint8_t j = 0U; j < unique_count; ++j) {
+            if(strcmp(app->tvs[j].path, app->tvs[i].path) == 0) {
+                existing = (int8_t)j;
+                break;
+            }
+        }
+        if(existing >= 0) {
+            if((int8_t)i == old_favorite) new_favorite = existing;
+            changed = true;
+            continue;
+        }
+        if(unique_count != i) app->tvs[unique_count] = app->tvs[i];
+        if((int8_t)i == old_favorite) new_favorite = (int8_t)unique_count;
+        unique_count++;
+    }
+    app->tv_count = unique_count;
+    app->favorite = new_favorite;
+    return changed;
 }
 
 static void tvr_load_config(TvrApp* app) {
@@ -411,6 +486,7 @@ static void tvr_load_config(TvrApp* app) {
         }
     }
     if(app->favorite < 0 || app->favorite >= (int8_t)app->tv_count) app->favorite = -1;
+    migrated = tvr_dedupe_saved_tvs(app) || migrated;
     free(data);
     if(migrated) tvr_save_config(app);
 }
@@ -566,6 +642,8 @@ static void tvr_build_visible(TvrApp* app) {
         }
         for(size_t n = 0; n < order_count; ++n) {
             uint16_t found = tvr_find_action(app, order[n]);
+            if(app->page == TvrPageNumbers && order[n] == TvrActionNumEnter && found == UINT16_MAX)
+                found = tvr_find_action(app, TvrActionOk);
             if(found != UINT16_MAX) app->visible[app->visible_count++] = found;
         }
     } else {
@@ -607,7 +685,7 @@ static void tvr_feedback(TvrApp* app) {
     app->sent_tick = furi_get_tick();
     notification_message(app->notifications, &sequence_blink_blue_10);
     if(app->haptic) notification_message(app->notifications, &sequence_single_vibro);
-    view_commit_model(app->remote_view, true);
+    tvr_redraw_remote(app);
 }
 
 static bool tvr_send_once(TvrApp* app, uint16_t command_index) {
@@ -643,6 +721,156 @@ static void tvr_stop_repeat(TvrApp* app) {
     app->transmitting = false;
 }
 
+static uint8_t tvr_number_slot(TvrAction action) {
+    if(action >= TvrActionNum1 && action <= TvrActionNum9)
+        return (uint8_t)(action - TvrActionNum1);
+    if(action == TvrActionDash) return 9U;
+    if(action == TvrActionNum0) return 10U;
+    if(action == TvrActionNumEnter || action == TvrActionOk) return 11U;
+    return 12U;
+}
+
+static const char* tvr_page_label(TvrPage page) {
+    static const char* const labels[] = {"QUICK", "TV", "NAV", "NUM", "MEDIA", "INPUT", "EXTRA"};
+    return page < TvrPageCount ? labels[page] : "REMOTE";
+}
+
+static uint8_t tvr_layout_subpage(const TvrApp* app, uint16_t position) {
+    if(position >= app->visible_count) return 0U;
+    if(app->page == TvrPageNumbers)
+        return tvr_number_slot(app->commands[app->visible[position]].action) / 12U;
+    if(app->page == TvrPageExtra) return (uint8_t)(position / 3U);
+    if(app->page == TvrPageChannel || app->page == TvrPageInputs) return (uint8_t)(position / 6U);
+    return 0U;
+}
+
+static uint8_t tvr_layout_page_count(const TvrApp* app) {
+    uint8_t count = 1U;
+    for(uint16_t i = 0U; i < app->visible_count; ++i) {
+        uint8_t page = tvr_layout_subpage(app, i) + 1U;
+        if(page > count) count = page;
+    }
+    return count;
+}
+
+static bool tvr_item_point(const TvrApp* app, uint16_t position, int16_t* x, int16_t* y) {
+    if(position >= app->visible_count) return false;
+    TvrAction action = app->commands[app->visible[position]].action;
+    if(app->page == TvrPageQuick) {
+        if(action == TvrActionPower) {
+            *x = 21;
+            *y = 20;
+        } else if(action == TvrActionMute) {
+            *x = 64;
+            *y = 20;
+        } else if(action == TvrActionInput) {
+            *x = 107;
+            *y = 20;
+        } else if(action == TvrActionVolumeUp) {
+            *x = 31;
+            *y = 37;
+        } else if(action == TvrActionVolumeDown) {
+            *x = 31;
+            *y = 54;
+        } else if(action == TvrActionChannelUp) {
+            *x = 95;
+            *y = 37;
+        } else {
+            *x = 95;
+            *y = 54;
+        }
+    } else if(app->page == TvrPageNumbers) {
+        uint8_t slot = tvr_number_slot(action);
+        if(slot < 12U) {
+            *x = (int16_t)(21 + (slot % 3U) * 43);
+            *y = (int16_t)(18 + (slot / 3U) * 13);
+        } else {
+            *x = 64;
+            *y = 75;
+        }
+    } else if(app->page == TvrPageMedia) {
+        *x = (int16_t)(16 + (position % 4U) * 32);
+        *y = (int16_t)(24 + (position / 4U) * 28);
+    } else if(app->page == TvrPageExtra) {
+        *x = 64;
+        *y = (int16_t)(20 + position * 16);
+    } else {
+        *x = (int16_t)(31 + (position % 2U) * 64);
+        *y = (int16_t)(20 + (position / 2U) * 16);
+    }
+    return true;
+}
+
+static bool tvr_item_layout(
+    const TvrApp* app,
+    uint16_t position,
+    uint8_t selected_page,
+    TvrButtonLayout* layout) {
+    if(position >= app->visible_count || tvr_layout_subpage(app, position) != selected_page)
+        return false;
+    TvrAction action = app->commands[app->visible[position]].action;
+    uint8_t local = position;
+    if(app->page == TvrPageQuick) {
+        if(action == TvrActionPower) {
+            *layout = (TvrButtonLayout){1, 13, 40, 14};
+        } else if(action == TvrActionMute) {
+            *layout = (TvrButtonLayout){44, 13, 40, 14};
+        } else if(action == TvrActionInput) {
+            *layout = (TvrButtonLayout){87, 13, 40, 14};
+        } else if(action == TvrActionVolumeUp) {
+            *layout = (TvrButtonLayout){1, 30, 61, 14};
+        } else if(action == TvrActionVolumeDown) {
+            *layout = (TvrButtonLayout){1, 47, 61, 14};
+        } else if(action == TvrActionChannelUp) {
+            *layout = (TvrButtonLayout){65, 30, 62, 14};
+        } else {
+            *layout = (TvrButtonLayout){65, 47, 62, 14};
+        }
+    } else if(app->page == TvrPageNumbers) {
+        uint8_t slot = tvr_number_slot(action);
+        if(slot < 12U) {
+            *layout = (TvrButtonLayout){
+                (int16_t)(1 + (slot % 3U) * 43), (int16_t)(12 + (slot / 3U) * 13), 40, 12};
+        } else {
+            *layout = (TvrButtonLayout){22, 24, 84, 22};
+        }
+    } else if(app->page == TvrPageMedia) {
+        *layout = (TvrButtonLayout){
+            (int16_t)(1 + (position % 4U) * 32), (int16_t)(13 + (position / 4U) * 25), 30, 22};
+    } else if(app->page == TvrPageExtra) {
+        local = position % 3U;
+        *layout = (TvrButtonLayout){1, (int16_t)(13 + local * 16), 126, 14};
+    } else if(app->page == TvrPageNavigation) {
+        *layout = (TvrButtonLayout){
+            (int16_t)(1 + (position % 2U) * 64), (int16_t)(14 + (position / 2U) * 24), 62, 21};
+    } else {
+        local = position % 6U;
+        *layout = (TvrButtonLayout){
+            (int16_t)(1 + (local % 2U) * 64), (int16_t)(13 + (local / 2U) * 16), 62, 14};
+    }
+    return true;
+}
+
+static void tvr_fit_text(Canvas* canvas, const char* text, char* output, size_t size, int width) {
+    if(!size) return;
+    if(size < 2U) {
+        output[0] = '\0';
+        return;
+    }
+    strlcpy(output, text ? text : "", size);
+    if(canvas_string_width(canvas, output) <= width) return;
+    size_t source_length = strlen(text ? text : "");
+    size_t keep = source_length < size - 2U ? source_length : size - 2U;
+    while(keep) {
+        memcpy(output, text, keep);
+        output[keep] = '~';
+        output[keep + 1U] = '\0';
+        if(canvas_string_width(canvas, output) <= width) return;
+        keep--;
+    }
+    output[0] = '\0';
+}
+
 static void tvr_draw_button(
     Canvas* canvas,
     int x,
@@ -658,28 +886,70 @@ static void tvr_draw_button(
     } else
         canvas_draw_rframe(canvas, x, y, w, h, 2);
     canvas_set_font(canvas, FontKeyboard);
-    if(tvr_icon_available(action)) {
+    bool has_icon = tvr_icon_available(action);
+    char fitted[TVR_NAME_MAX];
+    tvr_fit_text(canvas, label, fitted, sizeof(fitted), w - (has_icon ? 18 : 6));
+    if(has_icon) {
         tvr_icon_draw(canvas, action, x + 7, y + h / 2);
         canvas_draw_str_aligned(
-            canvas, x + w / 2 + 5, y + h / 2 + 3, AlignCenter, AlignCenter, label);
+            canvas, x + w / 2 + 5, y + h / 2 + 3, AlignCenter, AlignCenter, fitted);
     } else
-        canvas_draw_str_aligned(canvas, x + w / 2, y + h / 2 + 3, AlignCenter, AlignCenter, label);
+        canvas_draw_str_aligned(
+            canvas, x + w / 2, y + h / 2 + 3, AlignCenter, AlignCenter, fitted);
+    canvas_set_color(canvas, ColorBlack);
+}
+
+static void tvr_draw_media_button(
+    Canvas* canvas,
+    const TvrButtonLayout* layout,
+    const char* label,
+    bool selected,
+    TvrAction action) {
+    if(selected) {
+        canvas_draw_rbox(canvas, layout->x, layout->y, layout->width, layout->height, 2);
+        canvas_set_color(canvas, ColorWhite);
+    } else {
+        canvas_draw_rframe(canvas, layout->x, layout->y, layout->width, layout->height, 2);
+    }
+    tvr_icon_draw(canvas, action, layout->x + layout->width / 2, layout->y + 7);
+    canvas_set_font(canvas, FontKeyboard);
+    char fitted[12];
+    tvr_fit_text(canvas, label, fitted, sizeof(fitted), layout->width - 4);
+    canvas_draw_str_aligned(
+        canvas,
+        layout->x + layout->width / 2,
+        layout->y + layout->height - 1,
+        AlignCenter,
+        AlignBottom,
+        fitted);
     canvas_set_color(canvas, ColorBlack);
 }
 
 static void tvr_draw_header(Canvas* canvas, TvrApp* app) {
-    char title[22];
-    char page[12];
+    char title[TVR_NAME_MAX];
+    char page[16];
     const char* source = app->active_tv >= 0 ? app->tvs[app->active_tv].friendly : "No TV";
-    snprintf(title, sizeof(title), "%.17s", source);
-    snprintf(
-        page,
-        sizeof(page),
-        "%s%u/%u",
-        app->active_tv == app->favorite ? "*" : "",
-        (unsigned)app->page + 1U,
-        (unsigned)TvrPageCount);
     canvas_set_font(canvas, FontSecondary);
+    uint8_t page_count = tvr_layout_page_count(app);
+    uint8_t selected_page = tvr_layout_subpage(app, app->selected);
+    if(page_count > 1U)
+        snprintf(
+            page,
+            sizeof(page),
+            "%s%s %u/%u",
+            app->active_tv == app->favorite ? "*" : "",
+            tvr_page_label(app->page),
+            (unsigned)selected_page + 1U,
+            (unsigned)page_count);
+    else
+        snprintf(
+            page,
+            sizeof(page),
+            "%s%s",
+            app->active_tv == app->favorite ? "*" : "",
+            tvr_page_label(app->page));
+    int title_width = 123 - canvas_string_width(canvas, page);
+    tvr_fit_text(canvas, source, title, sizeof(title), title_width);
     canvas_draw_str(canvas, 1, 8, title);
     canvas_draw_str_aligned(canvas, 127, 8, AlignRight, AlignBottom, page);
     canvas_draw_line(canvas, 0, 10, 127, 10);
@@ -698,56 +968,44 @@ static void tvr_remote_draw(Canvas* canvas, void* context) {
                  ok = tvr_find_action(app, TvrActionOk);
         canvas_set_font(canvas, FontPrimary);
         if(up != UINT16_MAX)
-            canvas_draw_str_aligned(canvas, 64, 23, AlignCenter, AlignCenter, "^");
+            canvas_draw_str_aligned(canvas, 64, 20, AlignCenter, AlignCenter, "^");
         if(left != UINT16_MAX)
-            canvas_draw_str_aligned(canvas, 40, 39, AlignCenter, AlignCenter, "<");
-        if(ok != UINT16_MAX) tvr_draw_button(canvas, 52, 29, 24, 19, "OK", false, TvrActionOk);
+            canvas_draw_str_aligned(canvas, 40, 35, AlignCenter, AlignCenter, "<");
+        if(ok != UINT16_MAX) tvr_draw_button(canvas, 52, 26, 24, 19, "OK", false, TvrActionOk);
         if(right != UINT16_MAX)
-            canvas_draw_str_aligned(canvas, 88, 39, AlignCenter, AlignCenter, ">");
+            canvas_draw_str_aligned(canvas, 88, 35, AlignCenter, AlignCenter, ">");
         if(down != UINT16_MAX)
-            canvas_draw_str_aligned(canvas, 64, 56, AlignCenter, AlignCenter, "v");
+            canvas_draw_str_aligned(canvas, 64, 50, AlignCenter, AlignCenter, "v");
         canvas_set_font(canvas, FontKeyboard);
-        canvas_draw_str(canvas, 1, 62, "D-pad=TV  hold OK=more");
+        canvas_draw_str_aligned(canvas, 64, 63, AlignCenter, AlignBottom, "Hold OK: more");
     } else {
-        uint16_t shown = app->visible_count > 12U ? 12U : app->visible_count;
-        if(!shown) {
+        uint8_t selected_page = tvr_layout_subpage(app, app->selected);
+        if(!app->visible_count) {
             canvas_set_font(canvas, FontSecondary);
             canvas_draw_str_aligned(
                 canvas, 64, 36, AlignCenter, AlignCenter, "No commands on page");
         }
-        for(uint16_t pos = 0; pos < shown; ++pos) {
-            uint16_t offset = app->selected >= 12U ? (app->selected / 12U) * 12U : 0U;
-            uint16_t slot = offset + pos;
-            if(slot >= app->visible_count) break;
-            uint16_t index = app->visible[slot];
+        for(uint16_t pos = 0; pos < app->visible_count; ++pos) {
+            TvrButtonLayout layout;
+            if(!tvr_item_layout(app, pos, selected_page, &layout)) continue;
+            uint16_t index = app->visible[pos];
             TvrCommand* command = &app->commands[index];
-            uint8_t columns = app->page == TvrPageNavigation ? 2U : 3U;
-            int col = pos % columns, row = pos / columns;
-            int width = app->page == TvrPageNavigation ? 61 : 40;
-            int height = app->page == TvrPageNavigation ? 17 : 11;
-            int x = app->page == TvrPageNavigation ? 1 + col * 63 : 1 + col * 43;
-            int y = app->page == TvrPageNavigation ? 17 + row * 20 : 13 + row * 13;
-            tvr_draw_button(
-                canvas,
-                x,
-                y,
-                width,
-                height,
-                command->action == TvrActionOther ? command->name :
-                                                    tvr_action_label(command->action),
-                slot == app->selected,
-                command->action);
-        }
-        if(app->visible_count > 12U) {
-            char count[16];
-            snprintf(
-                count,
-                sizeof(count),
-                "%u/%u",
-                (unsigned)app->selected + 1U,
-                (unsigned)app->visible_count);
-            canvas_set_font(canvas, FontKeyboard);
-            canvas_draw_str_aligned(canvas, 127, 63, AlignRight, AlignBottom, count);
+            const char* label = command->action == TvrActionOther ?
+                                    command->name :
+                                    tvr_action_label(command->action);
+            if(app->page == TvrPageMedia)
+                tvr_draw_media_button(
+                    canvas, &layout, label, pos == app->selected, command->action);
+            else
+                tvr_draw_button(
+                    canvas,
+                    layout.x,
+                    layout.y,
+                    layout.width,
+                    layout.height,
+                    label,
+                    pos == app->selected,
+                    command->action);
         }
     }
     if(app->sent_visible) {
@@ -764,13 +1022,46 @@ static uint16_t tvr_selected_command(const TvrApp* app) {
                                                                       UINT16_MAX;
 }
 
+static bool tvr_move_selection(TvrApp* app, InputKey key) {
+    int16_t current_x;
+    int16_t current_y;
+    if(!tvr_item_point(app, app->selected, &current_x, &current_y)) return false;
+    uint16_t best = UINT16_MAX;
+    uint32_t best_score = UINT32_MAX;
+    for(uint16_t i = 0U; i < app->visible_count; ++i) {
+        if(i == app->selected) continue;
+        int16_t x;
+        int16_t y;
+        if(!tvr_item_point(app, i, &x, &y)) continue;
+        int32_t dx = (int32_t)x - current_x;
+        int32_t dy = (int32_t)y - current_y;
+        bool direction_ok = (key == InputKeyLeft && dx < 0) || (key == InputKeyRight && dx > 0) ||
+                            (key == InputKeyUp && dy < 0) || (key == InputKeyDown && dy > 0);
+        if(!direction_ok) continue;
+        uint32_t primary = (uint32_t)((key == InputKeyLeft || key == InputKeyRight) ?
+                                          (dx < 0 ? -dx : dx) :
+                                          (dy < 0 ? -dy : dy));
+        uint32_t secondary = (uint32_t)((key == InputKeyLeft || key == InputKeyRight) ?
+                                            (dy < 0 ? -dy : dy) :
+                                            (dx < 0 ? -dx : dx));
+        uint32_t score = primary * 256U + secondary * 8U;
+        if(score < best_score) {
+            best_score = score;
+            best = i;
+        }
+    }
+    if(best == UINT16_MAX) return false;
+    app->selected = best;
+    return true;
+}
+
 static bool tvr_remote_input(InputEvent* event, void* context) {
     TvrApp* app = context;
     if(event->type == InputTypeLong &&
        (event->key == InputKeyLeft || event->key == InputKeyRight)) {
         tvr_stop_repeat(app);
         tvr_change_page(app, event->key == InputKeyRight ? 1 : -1);
-        view_commit_model(app->remote_view, true);
+        tvr_redraw_remote(app);
         return true;
     }
     if(event->type == InputTypeLong && event->key == InputKeyOk) {
@@ -779,7 +1070,7 @@ static bool tvr_remote_input(InputEvent* event, void* context) {
             app->nav_extras = !app->nav_extras;
             app->selected = 0U;
             tvr_build_visible(app);
-            view_commit_model(app->remote_view, true);
+            tvr_redraw_remote(app);
         } else {
             tvr_switch(app, TvrViewManage);
         }
@@ -810,30 +1101,21 @@ static bool tvr_remote_input(InputEvent* event, void* context) {
         return true;
     }
     if(!app->visible_count) return false;
-    uint16_t old = app->selected;
-    uint8_t columns = app->page == TvrPageNavigation ? 2U : 3U;
-    if(event->key == InputKeyLeft && app->selected)
-        app->selected--;
-    else if(event->key == InputKeyRight && app->selected + 1U < app->visible_count)
-        app->selected++;
-    else if(event->key == InputKeyUp && app->selected >= columns)
-        app->selected -= columns;
-    else if(event->key == InputKeyDown && app->selected + columns < app->visible_count)
-        app->selected += columns;
-    if(old != app->selected) {
-        view_commit_model(app->remote_view, true);
+    if(tvr_move_selection(app, event->key)) {
+        tvr_redraw_remote(app);
         return true;
     }
     return false;
 }
 
-static void tvr_open_remote(TvrApp* app, int8_t index) {
+static void tvr_open_remote(TvrApp* app, int8_t index, TvrViewId back) {
+    app->remote_back = back;
     if(!tvr_read_remote(app, index)) {
         tvr_show(
             app,
             "Remote rejected",
             "Could not read a valid Flipper IR signals file. The saved file may be missing, malformed, or on an unavailable SD card.",
-            TvrViewMain);
+            back);
         return;
     }
     app->page = TvrPageQuick;
@@ -842,7 +1124,7 @@ static void tvr_open_remote(TvrApp* app, int8_t index) {
     app->selected = 0U;
     tvr_build_visible(app);
     app->sent_visible = false;
-    view_commit_model(app->remote_view, true);
+    tvr_redraw_remote(app);
     tvr_switch(app, TvrViewRemote);
 }
 
@@ -995,7 +1277,7 @@ static void tvr_rebuild_manage(TvrApp* app) {
 
 static void tvr_tv_selected(void* context, uint32_t index) {
     TvrApp* app = context;
-    if(index < app->tv_count) tvr_open_remote(app, (int8_t)index);
+    if(index < app->tv_count) tvr_open_remote(app, (int8_t)index, TvrViewTvs);
 }
 
 static void tvr_rebuild_tvs(TvrApp* app) {
@@ -1014,6 +1296,12 @@ static bool tvr_accept_remote(
     const char* remote_family,
     const char* source,
     TvrViewId back) {
+    for(uint8_t i = 0U; i < app->tv_count; ++i) {
+        if(strcmp(app->tvs[i].path, path) == 0) {
+            tvr_open_remote(app, (int8_t)i, back);
+            return true;
+        }
+    }
     if(app->tv_count >= TVR_MAX_TVS) {
         tvr_show(
             app,
@@ -1053,7 +1341,7 @@ static bool tvr_accept_remote(
         return false;
     }
     tvr_rebuild_main(app);
-    tvr_open_remote(app, (int8_t)added);
+    tvr_open_remote(app, (int8_t)added, back);
     return true;
 }
 
@@ -1105,20 +1393,27 @@ static bool tvr_db_extract(TvrApp* app, uint32_t model_index, char* path, size_t
     TvrDbModel model;
     bool ok = tvr_db_open(app, source) && tvr_db_read_model(app, source, model_index, &model);
     char temporary[TVR_PATH_MAX] = {0};
+    char backup[TVR_PATH_MAX] = {0};
     if(ok) {
-        storage_simply_mkdir(app->storage, APP_DATA_PATH(""));
-        ok = storage_simply_mkdir(app->storage, APP_DATA_PATH("remotes"));
+        ok = storage_simply_mkdir(app->storage, EXT_PATH("infrared")) &&
+             storage_simply_mkdir(app->storage, TVR_REMOTE_DIR);
     }
     if(ok) {
+        uint32_t profile_hash = tvr_profile_hash(app->db_brand.name, model.name, model.source_id);
         int n = snprintf(
-            path, path_size, APP_DATA_PATH("remotes/db_%06lu.ir"), (unsigned long)model.id);
+            path, path_size, TVR_REMOTE_DIR "/profile_%08lX.ir", (unsigned long)profile_hash);
         int t = snprintf(
             temporary,
             sizeof(temporary),
-            APP_DATA_PATH("remotes/db_%06lu.partial"),
-            (unsigned long)model.id);
-        ok = n > 0 && (size_t)n < path_size && t > 0 && (size_t)t < sizeof(temporary) &&
-             storage_file_seek(source, model.payload_offset, true) &&
+            TVR_REMOTE_DIR "/profile_%08lX.partial",
+            (unsigned long)profile_hash);
+        int b = snprintf(
+            backup,
+            sizeof(backup),
+            TVR_REMOTE_DIR "/profile_%08lX.backup",
+            (unsigned long)profile_hash);
+        ok = n > 0 && (size_t)n < path_size && t > 0 && (size_t)t < sizeof(temporary) && b > 0 &&
+             (size_t)b < sizeof(backup) && storage_file_seek(source, model.payload_offset, true) &&
              storage_file_open(output, temporary, FSAM_WRITE, FSOM_CREATE_ALWAYS);
     }
     uint8_t buffer[512];
@@ -1138,11 +1433,20 @@ static bool tvr_db_extract(TvrApp* app, uint32_t model_index, char* path, size_t
         if(temporary[0]) storage_common_remove(app->storage, temporary);
         return false;
     }
-    storage_common_remove(app->storage, path);
+    bool had = storage_file_exists(app->storage, path);
+    if(had) {
+        storage_common_remove(app->storage, backup);
+        if(storage_common_rename(app->storage, path, backup) != FSE_OK) {
+            storage_common_remove(app->storage, temporary);
+            return false;
+        }
+    }
     if(storage_common_rename(app->storage, temporary, path) != FSE_OK) {
         storage_common_remove(app->storage, temporary);
+        if(had) storage_common_rename(app->storage, backup, path);
         return false;
     }
+    if(had) storage_common_remove(app->storage, backup);
     return true;
 }
 
@@ -1159,8 +1463,8 @@ static void tvr_model_selected(void* context, uint32_t index) {
     if(!ok || !tvr_db_extract(app, index, path, sizeof(path))) {
         tvr_show(
             app,
-            "Code install failed",
-            "The bundled TV database could not be read or the SD card could not save this remote.",
+            "Profile save failed",
+            "The TV profile could not be read or saved to /ext/infrared/TV_Remote_FZ.",
             TvrViewModels);
         return;
     }
@@ -1173,7 +1477,7 @@ static void tvr_model_selected(void* context, uint32_t index) {
         app->db_brand.name,
         "Not specified by IRDB",
         model.name,
-        "Flipper Devices IRDB",
+        tvr_db_source_name(model.source_id),
         TvrViewModels);
 }
 
@@ -1263,7 +1567,7 @@ static void tvr_start_setup(TvrApp* app) {
         tvr_show(
             app,
             "Database unavailable",
-            "The bundled TV-code database is missing or damaged. Reinstall the application.",
+            "The bundled TV-profile database is missing or damaged. Reinstall the application.",
             TvrViewMain);
         return;
     }
@@ -1283,7 +1587,7 @@ static void tvr_start_setup(TvrApp* app) {
 static void tvr_main_selected(void* context, uint32_t index) {
     TvrApp* app = context;
     if(index == MainFavorite)
-        tvr_open_remote(app, app->favorite);
+        tvr_open_remote(app, app->favorite, TvrViewMain);
     else if(index == MainTvs) {
         tvr_rebuild_tvs(app);
         tvr_switch(app, TvrViewTvs);
@@ -1298,7 +1602,7 @@ static void tvr_main_selected(void* context, uint32_t index) {
             app,
             "About TV Remote FZ",
             "Version " TVR_VERSION
-            "\n\nIncludes 3,051 genuine TV remotes from the official Flipper Devices IRDB. Set Up TV lets you choose a brand and model without downloading codes.\n\nFirst launch takes about 2 minutes to extract the database. Later launches are fast.\n\nAliases affect layout only. Original signal bytes are never modified. TX means sent, not confirmed by the TV.\n\nHold Left/Right to change pages. Hold OK for remote tools.\n\nApp: GPL-3.0-or-later. IRDB data: MIT. No warranty.",
+            "\n\nIncludes verified TV profiles from Flipper Devices IRDB plus unique profiles from the maintained community Flipper-IRDB. Profile names are not universal-remote setup codes.\n\nSelected profiles are saved to /ext/infrared/TV_Remote_FZ on the microSD card.\n\nAliases affect layout only. Original signal bytes are never modified. TX means sent, not confirmed by the TV.\n\nHold Left/Right to change pages. Hold OK for remote tools.\n\nApp: GPL-3.0-or-later. IRDB data: MIT/CC0. No warranty.",
             TvrViewMain);
 }
 
@@ -1329,10 +1633,9 @@ static bool tvr_back(void* context) {
         tvr_switch(app, TvrViewGroups);
     else if(app->current == TvrViewModels)
         tvr_switch(app, TvrViewBrands);
-    else if(app->current == TvrViewRemote) {
-        tvr_rebuild_main(app);
-        tvr_switch(app, TvrViewMain);
-    } else if(app->current == TvrViewManage)
+    else if(app->current == TvrViewRemote)
+        tvr_switch(app, app->remote_back);
+    else if(app->current == TvrViewManage)
         tvr_switch(app, TvrViewRemote);
     else if(app->current == TvrViewCommands)
         tvr_switch(app, TvrViewManage);
@@ -1348,7 +1651,7 @@ static void tvr_tick(void* context) {
     if(app->sent_visible &&
        furi_get_tick() - app->sent_tick > furi_kernel_get_tick_frequency() / 2U) {
         app->sent_visible = false;
-        view_commit_model(app->remote_view, true);
+        tvr_redraw_remote(app);
     }
 }
 
@@ -1467,7 +1770,7 @@ int32_t tv_remote_fz_app(void* context) {
         return -1;
     }
     if(app->direct_launch && app->favorite >= 0)
-        tvr_open_remote(app, app->favorite);
+        tvr_open_remote(app, app->favorite, TvrViewMain);
     else
         tvr_switch(app, TvrViewMain);
     view_dispatcher_run(app->dispatcher);

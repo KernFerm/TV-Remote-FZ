@@ -6,7 +6,8 @@
 - Parsed protocol, address width, and command width are validated against the official infrared API.
 - Command count, names, paths, friendly names, and settings-file size are bounded.
 - The app never executes content from an `.ir` file and never invokes a shell.
-- Saved-TV configuration uses a synchronized temporary file and backup/restore promotion.
+- Saved-TV configuration uses a synchronized temporary file and backup/restore promotion at the explicit microSD path `/ext/apps_data/tv_remote_fz/tvs.cfg`.
+- Extracted bundled profiles use rollback-safe temporary/backup promotion under `/ext/infrared/TV_Remote_FZ`; an existing profile is restored if replacement fails.
 - A failed import is not saved and a failed signal reload is not transmitted.
 - Held transmission stops on release, Back, page change, view change, and application shutdown.
 

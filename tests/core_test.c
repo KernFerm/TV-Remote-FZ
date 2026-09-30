@@ -9,12 +9,14 @@ int main(void) {
     assert(tvr_normalize("VolumeUp") == TvrActionVolumeUp);
     assert(tvr_normalize("VOL+") == TvrActionVolumeUp);
     assert(tvr_normalize("volume-down") == TvrActionVolumeDown);
+    assert(tvr_normalize("Vol_dn") == TvrActionVolumeDown);
     assert(tvr_normalize("CH+") == TvrActionChannelUp);
     assert(tvr_normalize("Input / Source") == TvrActionInput);
     assert(tvr_normalize("HDMI 3") == TvrActionHdmi3);
     assert(tvr_normalize("Input_av") == TvrActionAv);
     assert(tvr_normalize("Component 2") == TvrActionComponent2);
-    assert(tvr_normalize("Enter") == TvrActionNumEnter);
+    assert(tvr_normalize("Enter") == TvrActionOk);
+    assert(tvr_normalize("Num_enter") == TvrActionNumEnter);
     assert(tvr_normalize("RETURN") == TvrActionBack);
     assert(tvr_normalize("Fast Forward") == TvrActionFastForward);
     assert(tvr_normalize("digit_9") == TvrActionNum9);
