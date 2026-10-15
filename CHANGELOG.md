@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.2 - 2026-10-15
+
+- Rebuilt and validated for official Flipper firmware 1.5.1.
+- Updated the target f7 SDK compatibility level from API 87.1 to API 88.2.
+- Preserved the existing remote database, saved-TV format, controls, and user data.
+
 ## 1.1.1 - 2026-09-29
 
 - Treats a generic IR command named `Enter` as the TV navigation OK/Select action.

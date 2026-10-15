@@ -4,7 +4,7 @@
 
 - Compile `tests/core_test.c` with `tv_remote_core.c` and run it.
 - Build with `python -m ufbt build`.
-- Confirm `APPCHK` reports target 7/API 87.1 and no unresolved symbols.
+- Confirm `APPCHK` reports target 7/API 88.2 and no unresolved symbols.
 
 ## Parser cases
 

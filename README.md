@@ -2,9 +2,9 @@
 
 TV Remote FZ is a graphical infrared remote for Flipper Zero. It ships with 3,207 verified TV profiles organized by brand and profile name, imports other Flipper `.ir` files, remembers up to eight televisions, and presents only commands actually stored in the selected file. It does not generate, infer, or substitute IR codes.
 
-Version: **1.1.1**
+Version: **1.1.2**
 
-Firmware target: official Flipper firmware **1.4.3+**, target f7 / API 87.1
+Firmware target: official Flipper firmware **1.5.1**, target f7 / API 88.2
 
 License: **GNU GPL v3 or later**
 
@@ -98,7 +98,7 @@ Pages are shown only when the selected IR profile contains commands for them. Fo
 
 ## Build
 
-With uFBT configured for firmware 1.4.3/API 87.1:
+With uFBT configured for official firmware 1.5.1/API 88.2:
 
 ```powershell
 Set-Location "C:\Users\frost\OneDrive\Desktop\flipper-applications\tv-remote"

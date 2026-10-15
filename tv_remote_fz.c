@@ -22,10 +22,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Exported in target-f7 API 87.1; omitted by the public umbrella header. */
+/* Exported in target-f7 API 88.2; omitted by the public umbrella header. */
 Stream* flipper_format_get_raw_stream(FlipperFormat* flipper_format);
 
-#define TVR_VERSION        "1.1.1"
+#define TVR_VERSION        "1.1.2"
 #define TVR_MAX_TVS        8U
 #define TVR_PATH_MAX       384U
 #define TVR_DATA_ROOT      EXT_PATH("apps_data")
